@@ -7,6 +7,7 @@ from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.staticfiles import StaticFiles
 
 
 KEYCLOAK_PUBLIC_URL = os.getenv("KEYCLOAK_PUBLIC_URL", "http://localhost:8080").rstrip("/")
@@ -27,6 +28,7 @@ app.add_middleware(
     same_site="lax",
     https_only=APP_URL.startswith("https://"),
 )
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 oauth = OAuth()
 oauth.register(
@@ -46,21 +48,28 @@ oauth.register(
 )
 
 
-def page(body: str) -> HTMLResponse:
+def page(body: str, title: str = "Acceso") -> HTMLResponse:
     return HTMLResponse(
         f"""<!doctype html>
 <html lang="es">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Keycloak Dummy</title>
-    <style>
-      body {{ font-family: system-ui, sans-serif; max-width: 720px; margin: 4rem auto; padding: 0 1rem; }}
-      a {{ display: inline-block; margin: .35rem .5rem .35rem 0; }}
-      code {{ background: #eee; padding: .15rem .3rem; }}
-    </style>
+    <meta name="description" content="Aplicación de demostración con Keycloak y Google">
+    <title>{html.escape(title)} · Keycloak Demo</title>
+    <link rel="stylesheet" href="/static/styles.css">
   </head>
-  <body>{body}</body>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Inicio">
+        <span class="brand-mark" aria-hidden="true">K</span>
+        <span>Keycloak Demo</span>
+      </a>
+      <span class="status"><i></i> Entorno local</span>
+    </header>
+    <main class="shell">{body}</main>
+    <footer>FastAPI · OpenID Connect · Authorization Code Flow</footer>
+  </body>
 </html>"""
     )
 
@@ -70,20 +79,81 @@ async def home(request: Request) -> HTMLResponse:
     user = request.session.get("user")
     if not user:
         return page(
-            "<h1>Aplicación dummy</h1>"
-            "<p>No has iniciado sesión.</p>"
-            '<a href="/login">Entrar con Keycloak</a>'
-            '<a href="/login/google">Entrar directamente con Google</a>'
+            """
+            <section class="login-layout">
+              <div class="intro">
+                <span class="eyebrow">AUTENTICACIÓN FEDERADA</span>
+                <h1>Un solo acceso.<br><em>Dos formas de entrar.</em></h1>
+                <p class="lead">
+                  Esta aplicación delega la identidad en Keycloak. Puedes usar
+                  un usuario del realm o continuar con tu cuenta de Google.
+                </p>
+                <div class="flow" aria-label="Flujo de autenticación">
+                  <span>Navegador</span><b>→</b><span>Keycloak</span><b>→</b><span>Google</span>
+                </div>
+              </div>
+              <div class="card login-card">
+                <div class="card-heading">
+                  <span class="shield" aria-hidden="true">✓</span>
+                  <div>
+                    <h2>Iniciar sesión</h2>
+                    <p>Elige cómo quieres identificarte</p>
+                  </div>
+                </div>
+                <div class="actions">
+                  <a class="button button-primary" href="/login">
+                    <span class="keycloak-icon" aria-hidden="true">K</span>
+                    Continuar con Keycloak
+                  </a>
+                  <div class="divider"><span>o</span></div>
+                  <a class="button button-google" href="/login/google">
+                    <span class="google-icon" aria-hidden="true">G</span>
+                    Continuar con Google
+                  </a>
+                </div>
+                <p class="privacy">
+                  Serás redirigido de forma segura. La aplicación nunca recibe
+                  tu contraseña.
+                </p>
+              </div>
+            </section>
+            """,
+            "Iniciar sesión",
         )
 
-    name = html.escape(user.get("name") or user.get("preferred_username") or user.get("email") or "usuario")
+    raw_name = user.get("name") or user.get("preferred_username") or user.get("email") or "usuario"
+    name = html.escape(raw_name)
     email = html.escape(user.get("email", "no disponible"))
     subject = html.escape(user.get("sub", "no disponible"))
+    initial = html.escape(raw_name[:1].upper())
     return page(
-        f"<h1>Hola Mundo, {name}</h1>"
-        f"<p>Email: <code>{email}</code></p>"
-        f"<p>Identificador de Keycloak (<code>sub</code>): <code>{subject}</code></p>"
-        '<a href="/logout">Cerrar sesión</a>'
+        f"""
+        <section class="welcome">
+          <div class="success-badge"><span>✓</span> Autenticación completada</div>
+          <div class="card profile-card">
+            <div class="avatar" aria-hidden="true">{initial}</div>
+            <p class="overline">SESIÓN ACTIVA</p>
+            <h1>Hola, <em>{name}</em></h1>
+            <p class="lead">Tu identidad fue validada correctamente por Keycloak.</p>
+            <dl class="user-data">
+              <div>
+                <dt>Correo electrónico</dt>
+                <dd>{email}</dd>
+              </div>
+              <div>
+                <dt>Identificador del usuario</dt>
+                <dd><code>{subject}</code></dd>
+              </div>
+              <div>
+                <dt>Proveedor de identidad</dt>
+                <dd><span class="verified-dot"></span> Keycloak / OIDC</dd>
+              </div>
+            </dl>
+            <a class="button button-danger" href="/logout">Cerrar sesión</a>
+          </div>
+        </section>
+        """,
+        f"Hola, {raw_name}",
     )
 
 
@@ -114,7 +184,18 @@ async def auth_callback(request: Request):
         token = await oauth.keycloak.authorize_access_token(request)
     except (OAuthError, RuntimeError) as exc:
         detail = html.escape(getattr(exc, "description", None) or str(exc))
-        return page(f"<h1>Error de autenticación</h1><p>{detail}</p><a href='/'>Volver</a>")
+        return page(
+            f"""
+            <section class="message-card card">
+              <span class="message-icon error">!</span>
+              <p class="overline">NO SE PUDO INICIAR SESIÓN</p>
+              <h1>Error de autenticación</h1>
+              <p class="lead">{detail}</p>
+              <a class="button button-primary" href="/">Volver al inicio</a>
+            </section>
+            """,
+            "Error de autenticación",
+        )
 
     # Authlib verifica firma, issuer, audience, nonce y expiración del ID token.
     claims = token.get("userinfo", {})
@@ -145,9 +226,19 @@ async def logout(request: Request) -> RedirectResponse:
 @app.get("/config-error", response_class=HTMLResponse)
 async def config_error() -> HTMLResponse:
     return page(
-        "<h1>Falta configuración</h1>"
-        "<p>Define <code>KEYCLOAK_CLIENT_SECRET</code> en el archivo <code>.env</code> "
-        "y vuelve a crear el contenedor.</p>"
+        """
+        <section class="message-card card">
+          <span class="message-icon warning">!</span>
+          <p class="overline">CONFIGURACIÓN INCOMPLETA</p>
+          <h1>Falta el Client Secret</h1>
+          <p class="lead">
+            Define <code>KEYCLOAK_CLIENT_SECRET</code> en el archivo
+            <code>.env</code> y vuelve a crear el contenedor.
+          </p>
+          <a class="button button-primary" href="/">Volver al inicio</a>
+        </section>
+        """,
+        "Falta configuración",
     )
 
 
