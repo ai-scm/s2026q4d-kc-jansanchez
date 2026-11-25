@@ -1,0 +1,30 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    container_name: keycloak
+    command: start-dev
+
+    environment:
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: backend_keycloak
+
+    environment:
+      - KEYCLOAK_URL=127.0.0.1:8000:8000"
+
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - keycloak
+
+volumes:
+  keycloak_data: 
